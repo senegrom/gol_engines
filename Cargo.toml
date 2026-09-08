@@ -28,7 +28,7 @@ name = "bench_dev"
 ahash = "0.8"
 anyhow = "1.0"
 flate2 = "1.1"
-num-bigint = "0.4"
+num-bigint = "0.5"
 rand = "0.9"
 rand_chacha = "0.9"
 tokio = { version = "1.44", features = ["rt-multi-thread", "sync"] }
