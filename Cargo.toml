@@ -40,7 +40,7 @@ num-format = { version = "0.4", features = [
 ], optional = true }
 
 [dev-dependencies]
-serial_test = "3.2"
+serial_test = "4.0"
 
 [profile.release]
 debug = true
