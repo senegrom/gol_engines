@@ -1,10 +1,27 @@
 version: 2
 updates:
-  - package-ecosystem: "cargo"
-    directory: "/"
+  - package-ecosystem: cargo
+    directory: /
     schedule:
-      interval: "weekly"
-  - package-ecosystem: "github-actions"
-    directory: "/"
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      # The RNG crates must be reviewed as one migration, including 0.x minors.
+      rand-family:
+        applies-to: version-updates
+        patterns: [rand, 'rand_*']
+      # Other 0.x minor updates may be breaking; only batch patch updates.
+      rust-patches:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [patch]
+  - package-ecosystem: github-actions
+    directory: /
     schedule:
-      interval: "weekly"
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ['*']
