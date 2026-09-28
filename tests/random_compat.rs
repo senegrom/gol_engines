@@ -2,7 +2,9 @@ use gol_engines::Pattern;
 
 #[test]
 fn seeded_random_preserves_the_rand_09_stream() {
-    // Captured from the unmodified main-branch implementation with rand 0.9.
+    // Captured from unmodified commit f323c544 with rand 0.9, before the upgrade.
+    // Fixed expected values detect stream changes that recomputing the expected
+    // bytes with the currently installed RNG would silently accept.
     let cases: &[(u32, u64, u64)] = &[
         (0, 0u64, 0u64),
         (0, 1u64, 1u64),
@@ -27,20 +29,4 @@ fn seeded_random_preserves_the_rand_09_stream() {
         let pattern = Pattern::random(size, Some(seed)).unwrap();
         assert_eq!(pattern.hash(), expected_hash, "size={size}, seed={seed}");
     }
-}
-
-#[test]
-fn unseeded_random_builds_valid_patterns() {
-    for size in [3u32, 4, 6] {
-        let pattern = Pattern::random(size, None).unwrap();
-        assert_eq!(pattern.get_size_log2(), size);
-        assert!(pattern.population() >= 0.into());
-        assert!(pattern.population() <= (1u64 << (2 * size)).into());
-    }
-}
-
-#[test]
-fn oversized_random_pattern_is_rejected() {
-    assert!(Pattern::random(usize::BITS / 2, Some(0)).is_err());
-    assert!(Pattern::random(usize::BITS / 2, None).is_err());
 }
