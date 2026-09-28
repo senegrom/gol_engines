@@ -6,7 +6,8 @@ use flate2::{
     Compression,
 };
 use num_bigint::BigInt;
-use rand::{Rng, SeedableRng};
+// The prelude exports the extension trait in both Rand 0.9 and 0.10.
+use rand::prelude::*;
 use std::{fs, io::Read, path::Path};
 
 /// Nodes typically have size of about 32 bytes, so 2^32 (128 GiB) nodes
@@ -288,7 +289,7 @@ impl Pattern {
     ///
     /// * `size_log2` - Log base 2 of the pattern's side length.
     /// * `seed` - Optional seed for the random number generator.
-    ///   If None, seeds from the OS.
+    ///   If None, seeds from the OS-seeded thread-local generator.
     ///
     /// # Returns
     ///
@@ -306,7 +307,7 @@ impl Pattern {
         if let Some(x) = seed {
             rand_chacha::ChaCha8Rng::seed_from_u64(x)
         } else {
-            rand_chacha::ChaCha8Rng::from_os_rng()
+            rand_chacha::ChaCha8Rng::from_rng(&mut rand::rng())
         }
         .fill(&mut cells[..]);
         if size_log2 < 3 {
