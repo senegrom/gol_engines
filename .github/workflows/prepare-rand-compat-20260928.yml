@@ -1,0 +1,146 @@
+name: Prepare and validate rand compatibility
+on:
+  push:
+    branches: [fix/rand-compat-dependabot-20260928]
+    paths: [.github/workflows/prepare-rand-compat-20260928.yml]
+permissions:
+  contents: write
+concurrency:
+  group: prepare-rand-compat-20260928
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt
+      - name: Capture the existing seeded stream
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p examples
+          test ! -e examples/capture_rand_compat.rs
+          cat > examples/capture_rand_compat.rs <<'RS'
+          fn main() {
+              for size in [0, 1, 2, 3, 4, 6] {
+                  for seed in [0u64, 1, u64::MAX] {
+                      let pattern = gol_engines::Pattern::random(size, Some(seed)).unwrap();
+                      println!("({size}, {seed}u64, {}u64),", pattern.hash());
+                  }
+              }
+          }
+          RS
+          cargo run --quiet --example capture_rand_compat > "$RUNNER_TEMP/rand-baseline.txt"
+      - name: Apply the source-only compatibility fix and regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path('src/pattern.rs')
+          source = path.read_text()
+          old = '''        if let Some(x) = seed {
+                      rand_chacha::ChaCha8Rng::seed_from_u64(x)
+                  } else {
+                      rand_chacha::ChaCha8Rng::from_os_rng()
+                  }
+                  .fill(&mut cells[..]);'''
+          new = '''        let mut rng = if let Some(x) = seed {
+                      rand_chacha::ChaCha8Rng::seed_from_u64(x)
+                  } else {
+                      rand_chacha::ChaCha8Rng::from_rng(&mut rand::rng())
+                  };
+                  // A Rng bound exposes fill_bytes in both rand 0.9 and 0.10,
+                  // without depending on the renamed RngCore/RngExt imports.
+                  fn fill_bytes(rng: &mut impl Rng, cells: &mut [u8]) {
+                      rng.fill_bytes(cells);
+                  }
+                  fill_bytes(&mut rng, &mut cells);'''
+          assert source.count(old) == 1, 'Random initialization changed; refusing a blind replacement'
+          source = source.replace(old, new)
+          source = source.replace('    ///   If None, seeds from the OS.', '    ///   If None, seeds from the OS-seeded thread-local generator.')
+          path.write_text(source)
+          baseline = (Path(os.environ['RUNNER_TEMP']) / 'rand-baseline.txt').read_text()
+          test = '''use gol_engines::Pattern;
+
+          #[test]
+          fn seeded_random_preserves_the_rand_09_stream() {
+              // Captured from the unmodified main-branch implementation with rand 0.9.
+              let cases: &[(u32, u64, u64)] = &[
+          ''' + baseline + '''    ];
+              for &(size, seed, expected_hash) in cases {
+                  let pattern = Pattern::random(size, Some(seed)).unwrap();
+                  assert_eq!(pattern.hash(), expected_hash, "size={size}, seed={seed}");
+              }
+          }
+
+          #[test]
+          fn unseeded_random_builds_valid_patterns() {
+              for size in [3u32, 4, 6] {
+                  let pattern = Pattern::random(size, None).unwrap();
+                  assert_eq!(pattern.get_size_log2(), size);
+                  assert!(pattern.population() >= 0.into());
+                  assert!(pattern.population() <= (1u64 << (2 * size)).into());
+              }
+          }
+
+          #[test]
+          fn oversized_random_pattern_is_rejected() {
+              assert!(Pattern::random(usize::BITS / 2, Some(0)).is_err());
+              assert!(Pattern::random(usize::BITS / 2, None).is_err());
+          }
+          '''
+          Path('tests').mkdir(exist_ok=True)
+          target = Path('tests/random_compat.rs')
+          assert not target.exists()
+          target.write_text(test)
+          PY
+          rustfmt --edition 2021 src/pattern.rs tests/random_compat.rs
+          git diff --check
+      - name: Validate current rand 0.9 dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --verbose
+          cargo test --verbose
+          cargo build --verbose --features cli_deps --bin gol_engines_cli
+          cargo test --verbose --features cli_deps
+          cargo run --quiet --example capture_rand_compat > "$RUNNER_TEMP/rand-current.txt"
+          diff -u "$RUNNER_TEMP/rand-baseline.txt" "$RUNNER_TEMP/rand-current.txt"
+      - name: Validate the exact Dependabot manifest without committing the upgrade
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp Cargo.toml "$RUNNER_TEMP/Cargo.toml.original"
+          trap 'cp "$RUNNER_TEMP/Cargo.toml.original" Cargo.toml' EXIT
+          git fetch origin 10a7bd053ae140e3840c014ebbbb13795889ccbc
+          git show 10a7bd053ae140e3840c014ebbbb13795889ccbc:Cargo.toml > Cargo.toml
+          rm -f Cargo.lock
+          cargo build --verbose
+          cargo test --verbose
+          cargo build --verbose --features cli_deps --bin gol_engines_cli
+          cargo test --verbose --features cli_deps
+          cargo run --quiet --example capture_rand_compat > "$RUNNER_TEMP/rand-upgraded.txt"
+          diff -u "$RUNNER_TEMP/rand-baseline.txt" "$RUNNER_TEMP/rand-upgraded.txt"
+      - name: Publish only the verified fix and tests to the repair branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm examples/capture_rand_compat.rs
+          git diff --exit-code -- Cargo.toml
+          git diff --check
+          git add src/pattern.rs tests/random_compat.rs
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix: support rand 0.9 and 0.10 without changing seeded patterns'
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/fix/rand-compat-dependabot-20260928
+          echo 'Validated default and CLI builds/tests with both current and Dependabot manifests; seeded output is unchanged.' >> "$GITHUB_STEP_SUMMARY"
