@@ -288,7 +288,7 @@ impl Pattern {
     ///
     /// * `size_log2` - Log base 2 of the pattern's side length.
     /// * `seed` - Optional seed for the random number generator.
-    ///   If None, seeds from the OS.
+    ///   If None, seeds from the OS-seeded thread-local generator.
     ///
     /// # Returns
     ///
@@ -303,12 +303,17 @@ impl Pattern {
         }
         let n = 1usize << size_log2;
         let mut cells = vec![0u8; (n * n).div_ceil(8).max(n)];
-        if let Some(x) = seed {
+        let mut rng = if let Some(x) = seed {
             rand_chacha::ChaCha8Rng::seed_from_u64(x)
         } else {
-            rand_chacha::ChaCha8Rng::from_os_rng()
+            rand_chacha::ChaCha8Rng::from_rng(&mut rand::rng())
+        };
+        // A Rng bound exposes fill_bytes in both rand 0.9 and 0.10,
+        // without depending on the renamed RngCore/RngExt imports.
+        fn fill_bytes(rng: &mut impl Rng, cells: &mut [u8]) {
+            rng.fill_bytes(cells);
         }
-        .fill(&mut cells[..]);
+        fill_bytes(&mut rng, &mut cells);
         if size_log2 < 3 {
             // clear the upper bits
             for x in cells.iter_mut() {
